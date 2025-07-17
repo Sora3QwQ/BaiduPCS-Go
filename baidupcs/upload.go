@@ -2,25 +2,20 @@ package baidupcs
 
 import (
 	"errors"
-	"math/rand"
+	"github.com/qjfoidnh/BaiduPCS-Go/baidupcs/pcserror"
+	"github.com/qjfoidnh/BaiduPCS-Go/pcsutil/converter"
 	"net/http"
 	"path"
 	"strings"
-	"time"
-
-	"github.com/qjfoidnh/BaiduPCS-Go/baidupcs/pcserror"
-	"github.com/qjfoidnh/BaiduPCS-Go/pcsutil/converter"
 )
 
 const (
 	// MaxUploadBlockSize 最大上传的文件分片大小
-	MaxUploadBlockSize = 2 * converter.GB
+	MaxUploadBlockSize = 16 * converter.MB
 	// MinUploadBlockSize 最小的上传的文件分片大小
 	MinUploadBlockSize = 4 * converter.MB
 	// MaxRapidUploadSize 秒传文件支持的最大文件大小
 	MaxRapidUploadSize = 20 * converter.GB
-	// RecommendUploadBlockSize 推荐的上传的文件分片大小
-	RecommendUploadBlockSize = 1 * converter.GB
 	// SliceMD5Size 计算 slice-md5 所需的长度
 	SliceMD5Size = 256 * converter.KB
 	// EmptyContentMD5 空串的md5
@@ -96,27 +91,15 @@ type (
 	}
 )
 
-func randomifyMD5(md5 string) string {
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	newmd5bytes := []byte(strings.ToLower(md5))
-	uppermd5 := []byte(strings.ToUpper(md5))
-	for i := range md5 {
-		if r.Float32() > 0.6 {
-			newmd5bytes[i] = uppermd5[i]
-		}
-	}
-	return string(newmd5bytes)
-}
-
 // RapidUpload 秒传文件
-func (pcs *BaiduPCS) RapidUpload(targetPath, contentMD5, sliceMD5, dataContent, crc32 string, offset, length, totalSize, dataTime int64) (pcsError pcserror.Error) {
+func (pcs *BaiduPCS) RapidUpload(targetPath, contentMD5, sliceMD5, dataContent, crc32 string, offset, length, totalSize, dataTime int64) (pcsError pcserror.Error, uploadid string) {
 	defer func() {
 		if pcsError == nil {
 			// 更新缓存
 			pcs.deleteCache([]string{path.Dir(targetPath)})
 		}
 	}()
-	pcsError = pcs.rapidUploadV2(targetPath, strings.ToLower(contentMD5), strings.ToLower(sliceMD5), dataContent, crc32, offset, length, totalSize, dataTime)
+	pcsError, uploadid = pcs.rapidUploadV2(targetPath, strings.ToLower(contentMD5), strings.ToLower(sliceMD5), dataContent, crc32, offset, length, totalSize, dataTime)
 	return
 }
 
@@ -141,13 +124,17 @@ func (pcs *BaiduPCS) rapidUpload(targetPath, contentMD5, sliceMD5, crc32 string,
 	return pcserror.DecodePanJSONError(OperationRapidUpload, dataReadCloser)
 }
 
-func (pcs *BaiduPCS) rapidUploadV2(targetPath, contentMD5, sliceMD5, dataContent, crc32 string, offset, length, totalSize, dataTime int64) (pcsError pcserror.Error) {
+func (pcs *BaiduPCS) rapidUploadV2(targetPath, contentMD5, sliceMD5, dataContent, crc32 string, offset, length, totalSize, dataTime int64) (pcsError pcserror.Error, uploadid string) {
 	dataReadCloser, pcsError := pcs.PrepareRapidUploadV2(targetPath, contentMD5, sliceMD5, dataContent, crc32, offset, length, totalSize, dataTime)
 	if pcsError != nil {
 		return
 	}
 	defer dataReadCloser.Close()
-	return pcserror.DecodeXPanJSONError(OperationRapidUpload, dataReadCloser)
+	jsonData := uploadPrecreateJSON{
+		PanErrorInfo: pcserror.NewPanErrorInfo(OperationRapidUpload),
+	}
+	pcsError = pcserror.HandleJSONParse(OperationUpload, dataReadCloser, &jsonData)
+	return pcsError, jsonData.UploadID
 }
 
 // RapidUploadNoCheckDir 秒传文件, 不进行目录检查, 会覆盖掉同名的目录!
@@ -198,8 +185,8 @@ func (pcs *BaiduPCS) Upload(policy, targetPath string, uploadFunc UploadFunc) (p
 }
 
 // UploadTmpFile 分片上传—文件分片及上传
-func (pcs *BaiduPCS) UploadTmpFile(uploadFunc UploadFunc) (md5 string, pcsError pcserror.Error) {
-	dataReadCloser, pcsError := pcs.PrepareUploadTmpFile(uploadFunc)
+func (pcs *BaiduPCS) UploadTmpFile(uploadid, targetPath string, partseq int, partOffset int64, uploadFunc UploadFunc) (md5 string, pcsError pcserror.Error) {
+	dataReadCloser, pcsError := pcs.PrepareUploadSuperfile2(uploadid, targetPath, partseq, partOffset, uploadFunc)
 	if pcsError != nil {
 		return "", pcsError
 	}
