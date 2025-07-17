@@ -298,7 +298,6 @@ func (utu *UploadTaskUnit) upload() (result *taskframework.TaskUnitRunResult) {
 			case 31363:
 				// block miss in superfile2, 上传状态过期
 				// 需要重试的
-				utu.UploadingDatabase.Delete(&utu.LocalFileChecksum.LocalFileMeta)
 				utu.UploadingDatabase.Save()
 
 				result.ResultMessage = StrUploadFailed
